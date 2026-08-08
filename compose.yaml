@@ -1,0 +1,10 @@
+services:
+  jackson:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - jackson-data:/app/data
+
+volumes:
+  jackson-data:
