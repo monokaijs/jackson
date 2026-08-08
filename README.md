@@ -99,6 +99,12 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
 
+## Releases
+
+Releases are created manually from GitHub's **Actions → Release → Run workflow** screen on the `main` branch. The default `current` strategy releases the version declared in `Cargo.toml`. Alternatively, select `patch`, `minor`, or `major` to derive the next version from the latest stable `vX.Y.Z` tag, or provide an exact SemVer such as `1.0.0-rc.1`.
+
+The workflow rejects invalid or duplicate versions, runs formatting, Clippy, and tests, then builds Linux x86-64, macOS Apple Silicon, and Windows x86-64 archives. A GitHub Release and tag are created only after all builds pass. Each release includes a `SHA256SUMS` file. Runtime installations still require `yt-dlp` on `PATH`.
+
 ## Source policy
 
 Only play media you are authorized to access and rebroadcast. Operators are responsible for complying with Discord's terms and each media provider's terms, copyright rules, and local law. The resolver is deliberately isolated in `src/resolver.rs` so a licensed catalog or first-party media API can replace `yt-dlp` without changing the player.
