@@ -2,7 +2,7 @@
 name = "jackson"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.93"
 description = "A low-overhead Discord music bot with persistent 24/7 mode"
 license = "MIT"
 

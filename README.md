@@ -38,7 +38,7 @@ Pause/resume, skip, loop, shuffle, and stop are also available as buttons. Playb
 
 Requirements:
 
-- Rust 1.85 or newer
+- Rust 1.93 or newer
 - A current [`yt-dlp`](https://github.com/yt-dlp/yt-dlp#installation) executable on `PATH`
 - A Discord application bot token
 
