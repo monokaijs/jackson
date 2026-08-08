@@ -204,19 +204,26 @@ jobs:
           if-no-files-found: error
 
   container:
-    name: Publish container image
+    name: Publish container linux/${{ matrix.arch }}
     needs: [prepare, verify]
     if: >-
       always() &&
       needs.prepare.result == 'success' &&
       (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -230,41 +237,79 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/jackson
           tags: |
-            type=raw,value=${{ needs.prepare.outputs.version }}
-            type=raw,value=${{ needs.prepare.outputs.tag }}
-            type=raw,value=latest,enable=${{ !inputs.prerelease && !contains(needs.prepare.outputs.version, '-') }}
+            type=raw,value=${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+            type=raw,value=${{ needs.prepare.outputs.tag }}-${{ matrix.arch }}
+            type=raw,value=latest-${{ matrix.arch }},enable=${{ !inputs.prerelease && !contains(needs.prepare.outputs.version, '-') }}
 
       - name: Build and push container image
         id: image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
             JACKSON_RELEASE_VERSION=${{ needs.prepare.outputs.version }}
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
+          cache-from: type=gha,scope=release-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-image-${{ matrix.arch }}
 
       - name: Summarize image
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          echo "### Container image" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Container image: linux/${ARCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}-${ARCH}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Digest: \`${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
-    name: Publish GitHub Release
-    needs: [prepare, build, container]
+  container-manifest:
+    name: Publish multi-architecture container manifest
+    needs: [prepare, container]
     if: >-
       always() &&
       needs.prepare.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
       needs.container.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Publish canonical image tags
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/jackson
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          STABLE: ${{ !inputs.prerelease && !contains(needs.prepare.outputs.version, '-') }}
+        run: |
+          set -euo pipefail
+          destinations=(--tag "$IMAGE:$VERSION" --tag "$IMAGE:$TAG")
+          if [[ "$STABLE" == "true" ]]; then
+            destinations+=(--tag "$IMAGE:latest")
+          fi
+          docker buildx imagetools create "${destinations[@]}" \
+            "$IMAGE:$VERSION-amd64" \
+            "$IMAGE:$VERSION-arm64"
+
+      - name: Inspect canonical image
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/jackson
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+
+  publish:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
