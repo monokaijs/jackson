@@ -13,10 +13,12 @@ use tokio::process::Command;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-const BUILD_VERSION: &str = match option_env!("JACKSON_RELEASE_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+fn build_version() -> &'static str {
+    match option_env!("JACKSON_RELEASE_VERSION") {
+        Some(version) if !version.is_empty() => version,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
 
 struct Handler {
     music: Arc<MusicService>,
@@ -81,7 +83,7 @@ async fn main() -> Result<()> {
         .init();
 
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--version")) {
-        println!("jackson {BUILD_VERSION}");
+        println!("jackson {}", build_version());
         return Ok(());
     }
 
@@ -89,7 +91,7 @@ async fn main() -> Result<()> {
     verify_ytdlp().await?;
     let database = Database::connect(&config.database_url).await?;
     let http_client = reqwest::Client::builder()
-        .user_agent(format!("jackson/{BUILD_VERSION}"))
+        .user_agent(format!("jackson/{}", build_version()))
         .pool_max_idle_per_host(16)
         .build()
         .context("failed to create media HTTP client")?;

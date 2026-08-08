@@ -3,7 +3,8 @@ FROM rust:1.85-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --locked --release
+ARG JACKSON_RELEASE_VERSION
+RUN JACKSON_RELEASE_VERSION="${JACKSON_RELEASE_VERSION}" cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

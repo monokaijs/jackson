@@ -22,9 +22,14 @@ on:
         type: boolean
         required: true
         default: false
+      artifact_run_id:
+        description: Optional prior run ID whose build artifacts should be reused
+        type: string
+        required: false
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release
@@ -113,6 +118,7 @@ jobs:
   verify:
     name: Verify release
     needs: prepare
+    if: inputs.artifact_run_id == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,6 +135,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: [prepare, verify]
+    if: inputs.artifact_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -186,16 +193,78 @@ jobs:
           New-Item -ItemType Directory -Force "dist/$archive" | Out-Null
           Copy-Item "target/$env:TARGET/release/$env:EXECUTABLE", README.md, LICENSE, .env.example "dist/$archive/"
           Compress-Archive -Path "dist/$archive" -DestinationPath "dist/$archive.zip"
+          Remove-Item -Recurse -Force "dist/$archive"
 
       - uses: actions/upload-artifact@v4
         with:
           name: jackson-${{ matrix.target }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
+
+  container:
+    name: Publish container image
+    needs: [prepare, verify]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Generate container metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/jackson
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest,enable=${{ !inputs.prerelease && !contains(needs.prepare.outputs.version, '-') }}
+
+      - name: Build and push container image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            JACKSON_RELEASE_VERSION=${{ needs.prepare.outputs.version }}
+          cache-from: type=gha,scope=release-image
+          cache-to: type=gha,mode=max,scope=release-image
+
+      - name: Summarize image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          echo "### Container image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`ghcr.io/${GITHUB_REPOSITORY}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: \`${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Publish GitHub Release
-    needs: [prepare, build]
+    needs: [prepare, build, container]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      needs.container.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -203,10 +272,23 @@ jobs:
           pattern: jackson-*
           path: dist
           merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
 
       - name: Create checksums
         working-directory: dist
-        run: sha256sum jackson-* > SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' archives < <(
+            find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+              -printf '%f\0' | sort -z
+          )
+          if [[ ${#archives[@]} -ne 3 ]]; then
+            echo "Expected 3 release archives, found ${#archives[@]}." >&2
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
 
       - name: Create release and tag
         env:
@@ -220,7 +302,7 @@ jobs:
           if [[ "$PRERELEASE" == "true" ]]; then
             prerelease_flag+=(--prerelease)
           fi
-          gh release create "$TAG" dist/* \
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --target "$SHA" \
             --title "$TAG" \

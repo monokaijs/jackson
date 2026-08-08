@@ -65,11 +65,12 @@ Global slash-command changes can take time to propagate. A development guild use
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 docker compose logs -f jackson
 ```
 
-The SQLite database is stored in the `jackson-data` volume. Update the image regularly because media sites change and an old `yt-dlp` build will eventually stop resolving sources.
+Compose pulls `ghcr.io/monokaijs/jackson:latest` by default. Set `JACKSON_IMAGE_TAG` to a release version such as `0.1.1` to pin deployments. The SQLite database is stored in the `jackson-data` volume. Update the image regularly because media sites change and an old `yt-dlp` build will eventually stop resolving sources.
 
 ## Configuration
 
@@ -103,7 +104,7 @@ cargo test --all-targets
 
 Releases are created manually from GitHub's **Actions → Release → Run workflow** screen on the `main` branch. The default `current` strategy releases the version declared in `Cargo.toml`. Alternatively, select `patch`, `minor`, or `major` to derive the next version from the latest stable `vX.Y.Z` tag, or provide an exact SemVer such as `1.0.0-rc.1`.
 
-The workflow rejects invalid or duplicate versions, runs formatting, Clippy, and tests, then builds Linux x86-64, macOS Apple Silicon, and Windows x86-64 archives. A GitHub Release and tag are created only after all builds pass. Each release includes a `SHA256SUMS` file. Runtime installations still require `yt-dlp` on `PATH`.
+The workflow rejects invalid or duplicate versions, runs formatting, Clippy, and tests, then builds Linux x86-64, macOS Apple Silicon, and Windows x86-64 archives. It also publishes an amd64/arm64 image to `ghcr.io/monokaijs/jackson` with version and `v`-prefixed tags; stable releases update `latest`. A GitHub Release and tag are created only after all builds pass. Each release includes a `SHA256SUMS` file. The optional artifact run ID can retry only the binary publish stage using archives from a prior successful build. Runtime binary installations still require `yt-dlp` on `PATH`; the container includes it.
 
 ## Source policy
 

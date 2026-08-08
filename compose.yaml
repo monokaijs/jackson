@@ -1,6 +1,6 @@
 services:
   jackson:
-    build: .
+    image: ghcr.io/monokaijs/jackson:${JACKSON_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     volumes:
