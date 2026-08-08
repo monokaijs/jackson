@@ -1,10 +1,52 @@
+name: jackson
+
 services:
   jackson:
-    image: ghcr.io/monokaijs/jackson:${JACKSON_IMAGE_TAG:-latest}
+    image: ghcr.io/monokaijs/jackson:${JACKSON_IMAGE_TAG:-0.1.2}
+    pull_policy: always
     restart: unless-stopped
-    env_file: .env
+    init: true
+    env_file:
+      - path: .env
+        required: true
     volumes:
       - jackson-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=1770
+      - /home/jackson/.cache:rw,noexec,nosuid,size=256m,uid=10001,gid=10001,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 30s
+    pids_limit: 512
+    cpus: ${JACKSON_CPUS:-2.0}
+    mem_limit: ${JACKSON_MEMORY_LIMIT:-2g}
+    mem_reservation: ${JACKSON_MEMORY_RESERVATION:-256m}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
+    networks:
+      - jackson-egress
 
 volumes:
   jackson-data:
+    name: jackson-data
+
+networks:
+  jackson-egress:
+    name: jackson-egress
+    driver: bridge

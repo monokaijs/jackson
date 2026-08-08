@@ -1,6 +1,6 @@
 [package]
 name = "jackson"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.93"
 description = "A low-overhead Discord music bot with persistent 24/7 mode"
@@ -19,6 +19,7 @@ serde_json = "1.0"
 serenity = { version = "0.12.5", default-features = false, features = ["builder", "cache", "client", "gateway", "http", "model", "rustls_backend"] }
 songbird = { version = "0.6.0", default-features = false, features = ["driver", "gateway", "rustls", "serenity", "tungstenite"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mkv", "mp3", "ogg", "vorbis"] }
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["fs", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"

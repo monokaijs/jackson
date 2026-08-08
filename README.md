@@ -65,12 +65,23 @@ Global slash-command changes can take time to propagate. A development guild use
 
 ```bash
 cp .env.example .env
+# Set DISCORD_TOKEN and keep JACKSON_IMAGE_TAG pinned to a released version.
+chmod 600 .env
 docker compose pull
 docker compose up -d
+docker compose ps
 docker compose logs -f jackson
 ```
 
-Compose pulls `ghcr.io/monokaijs/jackson:latest` by default. Set `JACKSON_IMAGE_TAG` to a release version such as `0.1.1` to pin deployments. The SQLite database is stored in the `jackson-data` volume. Update the image regularly because media sites change and an old `yt-dlp` build will eventually stop resolving sources.
+Compose pulls the multi-architecture `ghcr.io/monokaijs/jackson:0.1.2` release by default and Docker automatically selects amd64 or arm64. Set `JACKSON_IMAGE_TAG` to another released version when upgrading; architecture-specific tags such as `0.1.2-amd64` are also available. The service runs with a read-only root filesystem, no Linux capabilities, bounded resources and logs, a health check, and a persistent `jackson-data` volume for SQLite. No inbound ports are required. Update the image regularly because media sites change and an old `yt-dlp` build will eventually stop resolving sources.
+
+Create a consistent database backup during a brief graceful stop:
+
+```bash
+docker compose stop jackson
+docker compose cp jackson:/app/data/jackson.db ./jackson.db.backup
+docker compose start jackson
+```
 
 ## Configuration
 
@@ -82,6 +93,10 @@ Compose pulls `ghcr.io/monokaijs/jackson:latest` by default. Set `JACKSON_IMAGE_
 | `IDLE_DISCONNECT_SECS` | `300` | Empty-queue delay in normal mode |
 | `MAX_PLAYLIST_TRACKS` | `100` | Playlist cap, clamped from 1 to 500 |
 | `RUST_LOG` | `jackson=info,songbird=warn,serenity=warn` | Structured log filter |
+| `JACKSON_IMAGE_TAG` | `0.1.2` | Compose image version; pin this in production |
+| `JACKSON_CPUS` | `2.0` | Compose CPU limit |
+| `JACKSON_MEMORY_LIMIT` | `2g` | Compose memory limit |
+| `JACKSON_MEMORY_RESERVATION` | `256m` | Compose soft memory reservation |
 
 ## Design notes
 
@@ -104,7 +119,7 @@ cargo test --all-targets
 
 Releases are created manually from GitHub's **Actions → Release → Run workflow** screen on the `main` branch. The default `current` strategy releases the version declared in `Cargo.toml`. Alternatively, select `patch`, `minor`, or `major` to derive the next version from the latest stable `vX.Y.Z` tag, or provide an exact SemVer such as `1.0.0-rc.1`.
 
-The workflow rejects invalid or duplicate versions, runs formatting, Clippy, and tests, then builds Linux x86-64, macOS Apple Silicon, and Windows x86-64 archives. It also publishes an amd64/arm64 image to `ghcr.io/monokaijs/jackson` with version and `v`-prefixed tags; stable releases update `latest`. A GitHub Release and tag are created only after all builds pass. Each release includes a `SHA256SUMS` file. The optional artifact run ID can retry only the binary publish stage using archives from a prior successful build. Runtime binary installations still require `yt-dlp` on `PATH`; the container includes it.
+The workflow rejects invalid or duplicate versions, runs formatting, Clippy, and tests, then builds Linux x86-64, macOS Apple Silicon, and Windows x86-64 archives. Native amd64 and arm64 runners independently publish architecture-specific GHCR tags as soon as each image finishes; a final manifest publishes the version, `v`-prefixed, and stable `latest` multi-architecture tags. The GitHub Release publishes independently once its binary archives are ready. Each release includes a `SHA256SUMS` file. The optional artifact run ID can recover a release using archives from a prior successful build. Runtime binary installations still require `yt-dlp` on `PATH`; the container includes it.
 
 ## Source policy
 

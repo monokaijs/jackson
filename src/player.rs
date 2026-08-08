@@ -9,7 +9,10 @@ use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 use rand::seq::SliceRandom;
 use serenity::all::{ChannelId, GuildId};
-use songbird::{Event, EventContext, EventHandler, Songbird, TrackEvent, tracks::TrackHandle};
+use songbird::{
+    Event, EventContext, EventHandler, Songbird, TrackEvent,
+    tracks::{PlayMode, TrackHandle},
+};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -202,13 +205,11 @@ impl MusicService {
             }
 
             let previous = state.current.take().map(|current| current.item);
-            if !force_skip {
-                if let Some(previous) = previous {
-                    match state.loop_mode {
-                        LoopMode::Track => state.queue.push_front(previous),
-                        LoopMode::Queue => state.queue.push_back(previous),
-                        LoopMode::Off => {}
-                    }
+            if !force_skip && let Some(previous) = previous {
+                match state.loop_mode {
+                    LoopMode::Track => state.queue.push_front(previous),
+                    LoopMode::Queue => state.queue.push_back(previous),
+                    LoopMode::Off => {}
                 }
             }
 
@@ -258,6 +259,15 @@ impl MusicService {
                 },
             )
             .context("failed to attach track completion handler")?;
+        handle
+            .add_event(
+                Event::Track(TrackEvent::Error),
+                TrackFailed {
+                    guild_id,
+                    title: track.title.clone(),
+                },
+            )
+            .context("failed to attach track error handler")?;
 
         let mut state = player.lock().await;
         if let Some(current) = state.current.as_mut()
@@ -568,6 +578,29 @@ impl MusicService {
                 }
             }
         });
+    }
+}
+
+struct TrackFailed {
+    guild_id: GuildId,
+    title: String,
+}
+
+#[async_trait]
+impl EventHandler for TrackFailed {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        if let EventContext::Track(tracks) = ctx
+            && let Some((state, _)) = tracks.first()
+            && let PlayMode::Errored(error) = &state.playing
+        {
+            warn!(
+                guild_id = %self.guild_id,
+                title = %self.title,
+                ?error,
+                "audio track failed"
+            );
+        }
+        Some(Event::Cancel)
     }
 }
 
