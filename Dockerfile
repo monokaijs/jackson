@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.7
+ARG DENO_VERSION=2.9.4
+FROM denoland/deno:bin-${DENO_VERSION} AS deno
+
 FROM rust:1.93-bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake \
@@ -12,10 +15,12 @@ RUN JACKSON_RELEASE_VERSION="${JACKSON_RELEASE_VERSION}" cargo build --locked --
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates python3 python3-pip \
-    && python3 -m pip install --no-cache-dir --break-system-packages yt-dlp \
+    && python3 -m pip install --no-cache-dir --break-system-packages 'yt-dlp[default]' \
     && apt-get purge -y python3-pip \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=deno /deno /usr/local/bin/deno
 
 RUN useradd --create-home --uid 10001 jackson \
     && install -d -o jackson -g jackson /app/data

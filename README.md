@@ -39,7 +39,8 @@ Pause/resume, skip, loop, shuffle, and stop are also available as buttons. Playb
 Requirements:
 
 - Rust 1.93 or newer
-- A current [`yt-dlp`](https://github.com/yt-dlp/yt-dlp#installation) executable on `PATH`
+- A current [`yt-dlp`](https://github.com/yt-dlp/yt-dlp#installation) executable on `PATH`, installed with its default extras
+- [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.3 or newer on `PATH` for YouTube's JavaScript challenges
 - A Discord application bot token
 
 Create a bot in the Discord developer portal. Enable no privileged intents; Jackson only requests `GUILDS` and `GUILD_VOICE_STATES`. Invite it with the `bot` and `applications.commands` scopes and these channel permissions:

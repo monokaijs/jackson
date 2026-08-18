@@ -11,6 +11,7 @@ use rand::seq::SliceRandom;
 use serenity::all::{ChannelId, GuildId};
 use songbird::{
     Event, EventContext, EventHandler, Songbird, TrackEvent,
+    input::cached::Memory,
     tracks::{PlayMode, TrackHandle},
 };
 use tokio::sync::Mutex;
@@ -207,7 +208,8 @@ impl MusicService {
             let previous = state.current.take().map(|current| current.item);
             if !force_skip && let Some(previous) = previous {
                 match state.loop_mode {
-                    LoopMode::Track => state.queue.push_front(previous),
+                    // Track looping is handled by Songbird on the current, cached input.
+                    LoopMode::Track => {}
                     LoopMode::Queue => state.queue.push_back(previous),
                     LoopMode::Off => {}
                 }
@@ -240,7 +242,20 @@ impl MusicService {
             .manager
             .get(guild_id)
             .ok_or_else(|| anyhow!("I'm not connected to a voice channel."))?;
-        let input = self.resolver.input(&track);
+        // YouTube's media URL is resolved once, then the bytes read during playback are
+        // retained in a seekable cache. Native looping can rewind this input without
+        // launching yt-dlp again or downloading the track again.
+        let source = self.resolver.input(&track).await;
+        let input = match Memory::new(source).await {
+            Ok(input) => input,
+            Err(error) => {
+                let mut state = player.lock().await;
+                if state.current.as_ref().map(|current| current.generation) == Some(generation) {
+                    state.current = None;
+                }
+                return Err(error).context("failed to prepare cached audio input");
+            }
+        };
         let handle = call.lock().await.play_only_input(input.into());
 
         // Keeping this exactly at 1.0 preserves Opus frame passthrough.
@@ -270,9 +285,15 @@ impl MusicService {
             .context("failed to attach track error handler")?;
 
         let mut state = player.lock().await;
+        let should_loop_track = state.loop_mode == LoopMode::Track;
         if let Some(current) = state.current.as_mut()
             && current.generation == generation
         {
+            if should_loop_track {
+                handle
+                    .enable_loop()
+                    .context("failed to enable native track loop")?;
+            }
             current.handle = Some(handle);
             return Ok(());
         }
@@ -402,7 +423,16 @@ impl MusicService {
     }
 
     pub async fn set_loop(&self, guild_id: GuildId, loop_mode: LoopMode) -> Result<()> {
-        self.player(guild_id).await?.lock().await.loop_mode = loop_mode;
+        let player = self.player(guild_id).await?;
+        let mut state = player.lock().await;
+        state.loop_mode = loop_mode;
+        if let Some(handle) = state
+            .current
+            .as_ref()
+            .and_then(|current| current.handle.as_ref())
+        {
+            set_native_track_loop(handle, loop_mode)?;
+        }
         Ok(())
     }
 
@@ -410,6 +440,13 @@ impl MusicService {
         let player = self.player(guild_id).await?;
         let mut state = player.lock().await;
         state.loop_mode = state.loop_mode.next();
+        if let Some(handle) = state
+            .current
+            .as_ref()
+            .and_then(|current| current.handle.as_ref())
+        {
+            set_native_track_loop(handle, state.loop_mode)?;
+        }
         Ok(state.loop_mode)
     }
 
@@ -579,6 +616,15 @@ impl MusicService {
             }
         });
     }
+}
+
+fn set_native_track_loop(handle: &TrackHandle, loop_mode: LoopMode) -> Result<()> {
+    if loop_mode == LoopMode::Track {
+        handle.enable_loop()?;
+    } else {
+        handle.disable_loop()?;
+    }
+    Ok(())
 }
 
 struct TrackFailed {

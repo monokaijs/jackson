@@ -1,13 +1,13 @@
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serenity::all::UserId;
-use songbird::input::{Compose, YoutubeDl};
+use songbird::input::{Input, LiveInput, YoutubeDl, metadata::YoutubeDlOutput};
 use tokio::process::Command;
 use url::Url;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct QueuedTrack {
     pub title: String,
     pub artist: Option<String>,
@@ -15,7 +15,30 @@ pub struct QueuedTrack {
     pub thumbnail: Option<String>,
     pub duration: Option<Duration>,
     pub requester: UserId,
+    prepared_stream: Option<PreparedStream>,
 }
+
+#[derive(Clone)]
+struct PreparedStream(Arc<YoutubeDlOutput>);
+
+impl fmt::Debug for PreparedStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedStream(..)")
+    }
+}
+
+impl PartialEq for QueuedTrack {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.artist == other.artist
+            && self.source_url == other.source_url
+            && self.thumbnail == other.thumbnail
+            && self.duration == other.duration
+            && self.requester == other.requester
+    }
+}
+
+impl Eq for QueuedTrack {}
 
 impl QueuedTrack {
     pub fn display_artist(&self) -> &str {
@@ -37,8 +60,15 @@ impl Resolver {
         }
     }
 
-    pub fn input(&self, track: &QueuedTrack) -> YoutubeDl<'static> {
-        YoutubeDl::new(self.client.clone(), track.source_url.clone())
+    pub async fn input(&self, track: &QueuedTrack) -> Input {
+        if let Some(prepared) = &track.prepared_stream {
+            let source = YoutubeDl::new(self.client.clone(), track.source_url.clone());
+            if let Ok(stream) = source.get_stream(&prepared.0).await {
+                return Input::Live(LiveInput::Raw(stream), None);
+            }
+        }
+
+        YoutubeDl::new(self.client.clone(), track.source_url.clone()).into()
     }
 
     pub async fn resolve(&self, query: &str, requester: UserId) -> Result<Vec<QueuedTrack>> {
@@ -75,10 +105,14 @@ impl Resolver {
         } else {
             YoutubeDl::new(self.client.clone(), query)
         };
-        let metadata = source
-            .aux_metadata()
+        let output = source
+            .query(1)
             .await
-            .context("No playable audio was found for that query")?;
+            .context("No playable audio was found for that query")?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No playable audio was found for that query"))?;
+        let metadata = output.as_aux_metadata();
         let source_url = metadata
             .source_url
             .clone()
@@ -94,6 +128,7 @@ impl Resolver {
             thumbnail: metadata.thumbnail,
             duration: metadata.duration,
             requester,
+            prepared_stream: Some(PreparedStream(Arc::new(output))),
         }])
     }
 
@@ -139,6 +174,7 @@ impl Resolver {
                         .filter(|v| v.is_finite() && *v >= 0.0)
                         .map(Duration::from_secs_f64),
                     requester,
+                    prepared_stream: None,
                 })
             })
             .take(self.max_playlist_tracks)
