@@ -38,11 +38,16 @@ impl Resolver {
     pub fn new(
         client: reqwest::Client,
         max_playlist_tracks: usize,
+        cookies: Option<String>,
         cookies_file: Option<String>,
     ) -> Self {
-        let ytdlp_args = cookies_file
-            .map(|path| vec!["--cookies".to_owned(), path])
-            .unwrap_or_default();
+        let ytdlp_args = if let Some(cookies) = cookies {
+            vec!["--add-headers".to_owned(), format!("Cookie:{cookies}")]
+        } else if let Some(path) = cookies_file {
+            vec!["--cookies".to_owned(), path]
+        } else {
+            Vec::new()
+        };
         Self {
             client,
             max_playlist_tracks,

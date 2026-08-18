@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
         Resolver::new(
             http_client,
             config.max_playlist_tracks,
+            config.ytdlp_cookies,
             config.ytdlp_cookies_file,
         ),
         config.idle_disconnect,

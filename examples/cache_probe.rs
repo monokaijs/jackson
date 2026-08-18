@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("jackson-cache-probe")
         .build()?;
-    let resolver = Resolver::new(client, 1, None);
+    let resolver = Resolver::new(client, 1, None, None);
     let track = resolver
         .resolve(&query, UserId::new(1))
         .await?
