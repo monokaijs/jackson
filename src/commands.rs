@@ -44,7 +44,7 @@ pub async fn handle_command(
     let response = match execute(ctx, command, music).await {
         Ok(response) => response,
         Err(error) => {
-            error!(%error, command = %command.data.name, guild_id = ?command.guild_id, "command failed");
+            error!(?error, command = %command.data.name, guild_id = ?command.guild_id, "command failed");
             ui::error_response(&error)
         }
     };

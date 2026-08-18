@@ -10,6 +10,7 @@ pub struct Config {
     pub database_url: String,
     pub idle_disconnect: Duration,
     pub max_playlist_tracks: usize,
+    pub ytdlp_cookies_file: Option<String>,
 }
 
 impl Config {
@@ -34,6 +35,10 @@ impl Config {
             .parse::<usize>()
             .context("MAX_PLAYLIST_TRACKS must be an integer")?
             .clamp(1, 500);
+        let ytdlp_cookies_file = env::var("YTDLP_COOKIES_FILE")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
 
         Ok(Self {
             discord_token,
@@ -41,6 +46,7 @@ impl Config {
             database_url,
             idle_disconnect,
             max_playlist_tracks,
+            ytdlp_cookies_file,
         })
     }
 }

@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
     }
 
     let config = Config::from_env()?;
-    verify_ytdlp().await?;
+    verify_ytdlp(config.ytdlp_cookies_file.as_deref()).await?;
     let database = Database::connect(&config.database_url).await?;
     let http_client = reqwest::Client::builder()
         .user_agent(format!("jackson/{}", build_version()))
@@ -100,7 +100,11 @@ async fn main() -> Result<()> {
     let music = MusicService::new(
         Arc::clone(&voice),
         database,
-        Resolver::new(http_client, config.max_playlist_tracks),
+        Resolver::new(
+            http_client,
+            config.max_playlist_tracks,
+            config.ytdlp_cookies_file,
+        ),
         config.idle_disconnect,
     );
     let handler = Handler {
@@ -121,7 +125,16 @@ async fn main() -> Result<()> {
         .context("Discord client stopped")
 }
 
-async fn verify_ytdlp() -> Result<()> {
+async fn verify_ytdlp(cookies_file: Option<&str>) -> Result<()> {
+    if let Some(path) = cookies_file {
+        let metadata = tokio::fs::metadata(path).await.with_context(|| {
+            format!("YTDLP_COOKIES_FILE does not exist or is not readable: {path}")
+        })?;
+        if !metadata.is_file() {
+            bail!("YTDLP_COOKIES_FILE is not a regular file: {path}");
+        }
+    }
+
     let output = Command::new("yt-dlp").arg("--version").output().await;
     match output {
         Ok(output) if output.status.success() => {

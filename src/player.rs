@@ -245,7 +245,7 @@ impl MusicService {
         // YouTube's media URL is resolved once, then the bytes read during playback are
         // retained in a seekable cache. Native looping can rewind this input without
         // launching yt-dlp again or downloading the track again.
-        let source = self.resolver.input(&track).await;
+        let source = self.resolver.input(&track)?;
         let input = match Memory::new(source).await {
             Ok(input) => input,
             Err(error) => {

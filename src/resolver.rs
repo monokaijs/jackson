@@ -1,13 +1,17 @@
-use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    process::{Command as ProcessCommand, Stdio},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serenity::all::UserId;
-use songbird::input::{Input, LiveInput, YoutubeDl, metadata::YoutubeDlOutput};
-use tokio::process::Command;
+use songbird::input::{ChildContainer, Input, YoutubeDl};
+use tokio::process::Command as TokioCommand;
 use url::Url;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueuedTrack {
     pub title: String,
     pub artist: Option<String>,
@@ -15,30 +19,7 @@ pub struct QueuedTrack {
     pub thumbnail: Option<String>,
     pub duration: Option<Duration>,
     pub requester: UserId,
-    prepared_stream: Option<PreparedStream>,
 }
-
-#[derive(Clone)]
-struct PreparedStream(Arc<YoutubeDlOutput>);
-
-impl fmt::Debug for PreparedStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("PreparedStream(..)")
-    }
-}
-
-impl PartialEq for QueuedTrack {
-    fn eq(&self, other: &Self) -> bool {
-        self.title == other.title
-            && self.artist == other.artist
-            && self.source_url == other.source_url
-            && self.thumbnail == other.thumbnail
-            && self.duration == other.duration
-            && self.requester == other.requester
-    }
-}
-
-impl Eq for QueuedTrack {}
 
 impl QueuedTrack {
     pub fn display_artist(&self) -> &str {
@@ -50,25 +31,53 @@ impl QueuedTrack {
 pub struct Resolver {
     client: reqwest::Client,
     max_playlist_tracks: usize,
+    ytdlp_args: Vec<String>,
 }
 
 impl Resolver {
-    pub fn new(client: reqwest::Client, max_playlist_tracks: usize) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        max_playlist_tracks: usize,
+        cookies_file: Option<String>,
+    ) -> Self {
+        let ytdlp_args = cookies_file
+            .map(|path| vec!["--cookies".to_owned(), path])
+            .unwrap_or_default();
         Self {
             client,
             max_playlist_tracks,
+            ytdlp_args,
         }
     }
 
-    pub async fn input(&self, track: &QueuedTrack) -> Input {
-        if let Some(prepared) = &track.prepared_stream {
-            let source = YoutubeDl::new(self.client.clone(), track.source_url.clone());
-            if let Ok(stream) = source.get_stream(&prepared.0).await {
-                return Input::Live(LiveInput::Raw(stream), None);
-            }
+    fn configure_ytdlp(&self, source: YoutubeDl<'static>) -> YoutubeDl<'static> {
+        if self.ytdlp_args.is_empty() {
+            source
+        } else {
+            source.user_args(self.ytdlp_args.clone())
         }
+    }
 
-        YoutubeDl::new(self.client.clone(), track.source_url.clone()).into()
+    pub fn input(&self, track: &QueuedTrack) -> Result<Input> {
+        let child = ProcessCommand::new("yt-dlp")
+            .args(&self.ytdlp_args)
+            .args([
+                "--no-playlist",
+                "--no-progress",
+                "-f",
+                "ba[abr>0][vcodec=none]/best",
+                "-o",
+                "-",
+                "--",
+                &track.source_url,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("failed to start yt-dlp audio stream")?;
+
+        Ok(ChildContainer::from(child).into())
     }
 
     pub async fn resolve(&self, query: &str, requester: UserId) -> Result<Vec<QueuedTrack>> {
@@ -100,11 +109,12 @@ impl Resolver {
         search: bool,
         requester: UserId,
     ) -> Result<Vec<QueuedTrack>> {
-        let mut source = if search {
+        let source = if search {
             YoutubeDl::new_search(self.client.clone(), query)
         } else {
             YoutubeDl::new(self.client.clone(), query)
         };
+        let mut source = self.configure_ytdlp(source);
         let output = source
             .query(1)
             .await
@@ -128,12 +138,12 @@ impl Resolver {
             thumbnail: metadata.thumbnail,
             duration: metadata.duration,
             requester,
-            prepared_stream: Some(PreparedStream(Arc::new(output))),
         }])
     }
 
     async fn resolve_playlist(&self, url: &str, requester: UserId) -> Result<Vec<QueuedTrack>> {
-        let output = Command::new("yt-dlp")
+        let output = TokioCommand::new("yt-dlp")
+            .args(&self.ytdlp_args)
             .args([
                 "--dump-single-json",
                 "--flat-playlist",
@@ -174,7 +184,6 @@ impl Resolver {
                         .filter(|v| v.is_finite() && *v >= 0.0)
                         .map(Duration::from_secs_f64),
                     requester,
-                    prepared_stream: None,
                 })
             })
             .take(self.max_playlist_tracks)
