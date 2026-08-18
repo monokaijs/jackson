@@ -27,6 +27,14 @@ async fn main() -> Result<()> {
     let cache = Memory::new(source)
         .await
         .context("failed to prepare cached audio input")?;
+    let mut loader = cache.new_handle();
+    tokio::task::spawn_blocking(move || loader.raw.load_all())
+        .await
+        .context("audio cache loader panicked")?;
+    anyhow::ensure!(
+        !cache.raw.is_empty(),
+        "yt-dlp returned an empty audio stream"
+    );
     let input: Input = cache.into();
     input
         .make_playable_async(get_codec_registry(), get_probe())

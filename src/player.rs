@@ -256,6 +256,17 @@ impl MusicService {
                 return Err(error).context("failed to prepare cached audio input");
             }
         };
+        let mut loader = input.new_handle();
+        tokio::task::spawn_blocking(move || loader.raw.load_all())
+            .await
+            .context("audio cache loader panicked")?;
+        if input.raw.is_empty() {
+            let mut state = player.lock().await;
+            if state.current.as_ref().map(|current| current.generation) == Some(generation) {
+                state.current = None;
+            }
+            bail!("yt-dlp returned an empty audio stream");
+        }
         let handle = call.lock().await.play_only_input(input.into());
 
         // Keeping this exactly at 1.0 preserves Opus frame passthrough.
