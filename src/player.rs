@@ -11,7 +11,11 @@ use rand::seq::SliceRandom;
 use serenity::all::{ChannelId, GuildId};
 use songbird::{
     Event, EventContext, EventHandler, Songbird, TrackEvent,
-    input::cached::Memory,
+    input::{
+        AudioStream, Input, LiveInput,
+        cached::Memory,
+        core::io::{MediaSource, ReadOnlySource},
+    },
     tracks::{PlayMode, TrackHandle},
 };
 use tokio::sync::Mutex;
@@ -63,6 +67,7 @@ pub struct PlayerSnapshot {
 
 struct CurrentTrack {
     item: QueuedTrack,
+    cache: Option<Memory>,
     handle: Option<TrackHandle>,
     generation: u64,
     started_at: Instant,
@@ -193,7 +198,7 @@ impl MusicService {
         force_skip: bool,
     ) -> Result<()> {
         let player = self.player(guild_id).await?;
-        let (next, generation, volume, idle_generation) = {
+        let (next, cached, generation, volume, idle_generation) = {
             let mut state = player.lock().await;
 
             if let Some(expected) = ended_generation
@@ -205,17 +210,20 @@ impl MusicService {
                 return Ok(());
             }
 
-            let previous = state.current.take().map(|current| current.item);
+            let previous = state.current.take();
+            let mut repeat = None;
             if !force_skip && let Some(previous) = previous {
                 match state.loop_mode {
-                    // Track looping is handled by Songbird on the current, cached input.
-                    LoopMode::Track => {}
-                    LoopMode::Queue => state.queue.push_back(previous),
+                    LoopMode::Track => repeat = Some((previous.item, previous.cache)),
+                    LoopMode::Queue => state.queue.push_back(previous.item),
                     LoopMode::Off => {}
                 }
             }
 
-            let next = state.queue.pop_front();
+            let (next, cached) = match repeat {
+                Some((item, cache)) => (Some(item), cache),
+                None => (state.queue.pop_front(), None),
+            };
             state.paused = false;
             let generation = state.next_generation();
             state.idle_generation = state.idle_generation.wrapping_add(1);
@@ -225,12 +233,13 @@ impl MusicService {
             if let Some(item) = next.clone() {
                 state.current = Some(CurrentTrack {
                     item,
+                    cache: None,
                     handle: None,
                     generation,
                     started_at: Instant::now(),
                 });
             }
-            (next, generation, volume, idle_generation)
+            (next, cached, generation, volume, idle_generation)
         };
 
         let Some(track) = next else {
@@ -242,32 +251,42 @@ impl MusicService {
             .manager
             .get(guild_id)
             .ok_or_else(|| anyhow!("I'm not connected to a voice channel."))?;
-        // YouTube's media URL is resolved once, then the bytes read during playback are
-        // retained in a seekable cache. Native looping can rewind this input without
-        // launching yt-dlp again or downloading the track again.
-        let source = self.resolver.input(&track)?;
-        let input = match Memory::new(source).await {
-            Ok(input) => input,
-            Err(error) => {
-                let mut state = player.lock().await;
-                if state.current.as_ref().map(|current| current.generation) == Some(generation) {
-                    state.current = None;
+        // The first pass is exposed as forward-only so the WebM parser can start while
+        // yt-dlp is still streaming. The same bytes are retained in a shared cache; a
+        // track-loop replay gets a fresh, seekable reader without another download.
+        let (cache, input) = if let Some(cache) = cached {
+            let input = cache.new_handle().into();
+            (cache, input)
+        } else {
+            let source = self.resolver.input(&track)?;
+            let cache = match Memory::new(source).await {
+                Ok(cache) => cache,
+                Err(error) => {
+                    let mut state = player.lock().await;
+                    if state.current.as_ref().map(|current| current.generation) == Some(generation)
+                    {
+                        state.current = None;
+                    }
+                    return Err(error).context("failed to prepare cached audio input");
                 }
-                return Err(error).context("failed to prepare cached audio input");
-            }
+            };
+            let input = streaming_cached_input(&cache);
+            (cache, input)
         };
-        let mut loader = input.new_handle();
-        tokio::task::spawn_blocking(move || loader.raw.load_all())
-            .await
-            .context("audio cache loader panicked")?;
-        if input.raw.is_empty() {
+
+        {
             let mut state = player.lock().await;
-            if state.current.as_ref().map(|current| current.generation) == Some(generation) {
-                state.current = None;
-            }
-            bail!("yt-dlp returned an empty audio stream");
+            let Some(current) = state
+                .current
+                .as_mut()
+                .filter(|current| current.generation == generation)
+            else {
+                return Ok(());
+            };
+            current.cache = Some(cache.new_handle());
         }
-        let handle = call.lock().await.play_only_input(input.into());
+
+        let handle = call.lock().await.play_only_input(input);
 
         // Keeping this exactly at 1.0 preserves Opus frame passthrough.
         if (volume - 1.0).abs() > f32::EPSILON {
@@ -296,15 +315,9 @@ impl MusicService {
             .context("failed to attach track error handler")?;
 
         let mut state = player.lock().await;
-        let should_loop_track = state.loop_mode == LoopMode::Track;
         if let Some(current) = state.current.as_mut()
             && current.generation == generation
         {
-            if should_loop_track {
-                handle
-                    .enable_loop()
-                    .context("failed to enable native track loop")?;
-            }
             current.handle = Some(handle);
             return Ok(());
         }
@@ -434,16 +447,7 @@ impl MusicService {
     }
 
     pub async fn set_loop(&self, guild_id: GuildId, loop_mode: LoopMode) -> Result<()> {
-        let player = self.player(guild_id).await?;
-        let mut state = player.lock().await;
-        state.loop_mode = loop_mode;
-        if let Some(handle) = state
-            .current
-            .as_ref()
-            .and_then(|current| current.handle.as_ref())
-        {
-            set_native_track_loop(handle, loop_mode)?;
-        }
+        self.player(guild_id).await?.lock().await.loop_mode = loop_mode;
         Ok(())
     }
 
@@ -451,13 +455,6 @@ impl MusicService {
         let player = self.player(guild_id).await?;
         let mut state = player.lock().await;
         state.loop_mode = state.loop_mode.next();
-        if let Some(handle) = state
-            .current
-            .as_ref()
-            .and_then(|current| current.handle.as_ref())
-        {
-            set_native_track_loop(handle, state.loop_mode)?;
-        }
         Ok(state.loop_mode)
     }
 
@@ -629,13 +626,11 @@ impl MusicService {
     }
 }
 
-fn set_native_track_loop(handle: &TrackHandle, loop_mode: LoopMode) -> Result<()> {
-    if loop_mode == LoopMode::Track {
-        handle.enable_loop()?;
-    } else {
-        handle.disable_loop()?;
-    }
-    Ok(())
+fn streaming_cached_input(cache: &Memory) -> Input {
+    let stream = AudioStream {
+        input: Box::new(ReadOnlySource::new(cache.new_handle())) as Box<dyn MediaSource>,
+    };
+    Input::Live(LiveInput::Raw(stream), None)
 }
 
 struct TrackFailed {
