@@ -62,7 +62,12 @@ impl Resolver {
             ytdlp_args.extend(["--cookies".to_owned(), path]);
             ytdlp_args.extend([
                 "--extractor-args".to_owned(),
-                "youtube:player_client=default,web_embedded".to_owned(),
+                // The default client currently resolves Android VR media URLs which
+                // YouTube rejects with HTTP 403 from some server IPs. Restricting the
+                // request to the embedded web client produces a playable media URL;
+                // listing it after `default` is not a fallback because yt-dlp may
+                // still select the unusable default-client format.
+                "youtube:player_client=web_embedded".to_owned(),
             ]);
         }
 
@@ -301,6 +306,28 @@ mod tests {
                 ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n",
                 ".youtube.com\tTRUE\t/\tTRUE\t0\tTOKEN\tvalue=with=equals\n",
             )
+        );
+    }
+
+    #[test]
+    fn cookie_configuration_uses_only_the_playable_youtube_client() {
+        let resolver = Resolver::new(
+            reqwest::Client::new(),
+            100,
+            Some("SID=abc".to_owned()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolver.ytdlp_args.last().map(String::as_str),
+            Some("youtube:player_client=web_embedded")
+        );
+        assert!(
+            !resolver
+                .ytdlp_args
+                .iter()
+                .any(|arg| arg.contains("player_client=default"))
         );
     }
 }
