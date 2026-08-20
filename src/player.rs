@@ -27,6 +27,8 @@ use crate::{
 };
 
 const MAX_QUEUE_LENGTH: usize = 1_000;
+const STARTUP_BUFFER_BYTES: usize = 256 * 1024;
+const STARTUP_BUFFER_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LoopMode {
@@ -270,6 +272,11 @@ impl MusicService {
                     return Err(error).context("failed to prepare cached audio input");
                 }
             };
+            // Pull the source ahead of the real-time audio reader. Without this,
+            // transient yt-dlp reconnects happen directly on Songbird's read path
+            // and are audible as short stalls near the beginning of a track.
+            let _loader = cache.raw.spawn_loader();
+            wait_for_startup_buffer(&cache).await;
             let input = streaming_cached_input(&cache);
             (cache, input)
         };
@@ -623,6 +630,16 @@ impl MusicService {
                 }
             }
         });
+    }
+}
+
+async fn wait_for_startup_buffer(cache: &Memory) {
+    let started_at = Instant::now();
+    while cache.raw.len() < STARTUP_BUFFER_BYTES
+        && !cache.raw.is_finished()
+        && started_at.elapsed() < STARTUP_BUFFER_TIMEOUT
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
