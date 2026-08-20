@@ -21,13 +21,11 @@ songbird = { version = "0.6.0", default-features = false, features = ["driver", 
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mkv", "mp3", "ogg", "vorbis"] }
 thiserror = "2.0"
+tempfile = "3.20"
 tokio = { version = "1.47", features = ["fs", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
-
-[dev-dependencies]
-tempfile = "3.20"
 
 [profile.release]
 codegen-units = 1

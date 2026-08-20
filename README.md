@@ -93,7 +93,7 @@ docker compose start jackson
 | `DATABASE_URL` | `sqlite://data/jackson.db?mode=rwc` | SQLite connection URL |
 | `IDLE_DISCONNECT_SECS` | `300` | Empty-queue delay in normal mode |
 | `MAX_PLAYLIST_TRACKS` | `100` | Playlist cap, clamped from 1 to 500 |
-| `YTDLP_COOKIES` | unset | Optional single-line HTTP Cookie header value passed to every yt-dlp request |
+| `YTDLP_COOKIES` | unset | Optional single-line YouTube Cookie header value converted to a private temporary Netscape cookie jar |
 | `YTDLP_COOKIES_FILE` | unset | Optional Netscape-format cookies file path passed to every yt-dlp invocation |
 | `RUST_LOG` | `jackson=info,songbird=warn,serenity=warn` | Structured log filter |
 | `JACKSON_IMAGE_TAG` | `0.1.2` | Compose image version; pin this in production |

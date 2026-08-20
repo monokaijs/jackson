@@ -1,6 +1,8 @@
 use std::{
     borrow::Cow,
+    io::Write,
     process::{Command as ProcessCommand, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
@@ -32,6 +34,7 @@ pub struct Resolver {
     client: reqwest::Client,
     max_playlist_tracks: usize,
     ytdlp_args: Vec<String>,
+    _cookie_file: Option<Arc<tempfile::TempPath>>,
 }
 
 impl Resolver {
@@ -40,19 +43,37 @@ impl Resolver {
         max_playlist_tracks: usize,
         cookies: Option<String>,
         cookies_file: Option<String>,
-    ) -> Self {
-        let ytdlp_args = if let Some(cookies) = cookies {
-            vec!["--add-headers".to_owned(), format!("Cookie:{cookies}")]
+    ) -> Result<Self> {
+        let mut generated_cookie_file = None;
+        let cookie_path = if let Some(cookies) = cookies {
+            let mut file = tempfile::NamedTempFile::new()
+                .context("failed to create temporary yt-dlp cookie file")?;
+            file.write_all(cookie_header_to_netscape(&cookies)?.as_bytes())
+                .context("failed to write temporary yt-dlp cookie file")?;
+            let path = file.path().to_string_lossy().into_owned();
+            generated_cookie_file = Some(Arc::new(file.into_temp_path()));
+            Some(path)
         } else if let Some(path) = cookies_file {
-            vec!["--cookies".to_owned(), path]
+            Some(path)
         } else {
-            Vec::new()
+            None
         };
-        Self {
+
+        let mut ytdlp_args = Vec::new();
+        if let Some(path) = cookie_path {
+            ytdlp_args.extend(["--cookies".to_owned(), path]);
+            ytdlp_args.extend([
+                "--extractor-args".to_owned(),
+                "youtube:player_client=default,web_embedded".to_owned(),
+            ]);
+        }
+
+        Ok(Self {
             client,
             max_playlist_tracks,
             ytdlp_args,
-        }
+            _cookie_file: generated_cookie_file,
+        })
     }
 
     fn configure_ytdlp(&self, source: YoutubeDl<'static>) -> YoutubeDl<'static> {
@@ -196,6 +217,32 @@ impl Resolver {
     }
 }
 
+fn cookie_header_to_netscape(header: &str) -> Result<String> {
+    let mut output = String::from("# Netscape HTTP Cookie File\n");
+    let mut found_cookie = false;
+
+    for part in header.split(';') {
+        let (name, value) = part
+            .trim()
+            .split_once('=')
+            .ok_or_else(|| anyhow!("YTDLP_COOKIES contains an invalid cookie"))?;
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || name.contains('\t') || value.contains('\t') {
+            bail!("YTDLP_COOKIES contains an invalid cookie");
+        }
+        output.push_str(&format!(
+            ".youtube.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n"
+        ));
+        found_cookie = true;
+    }
+
+    if !found_cookie {
+        bail!("YTDLP_COOKIES contains no cookies");
+    }
+    Ok(output)
+}
+
 fn looks_like_playlist(url: &Url) -> bool {
     url.query_pairs().any(|(key, _)| key == "list")
         || url.path().contains("playlist")
@@ -245,5 +292,17 @@ mod tests {
         assert!(!looks_like_playlist(
             &Url::parse("https://youtube.com/watch?v=abc").unwrap()
         ));
+    }
+
+    #[test]
+    fn converts_cookie_header_to_netscape_jar() {
+        assert_eq!(
+            cookie_header_to_netscape("SID=abc; TOKEN=value=with=equals").unwrap(),
+            concat!(
+                "# Netscape HTTP Cookie File\n",
+                ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n",
+                ".youtube.com\tTRUE\t/\tTRUE\t0\tTOKEN\tvalue=with=equals\n",
+            )
+        );
     }
 }
