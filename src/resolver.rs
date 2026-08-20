@@ -53,10 +53,8 @@ impl Resolver {
             let path = file.path().to_string_lossy().into_owned();
             generated_cookie_file = Some(Arc::new(file.into_temp_path()));
             Some(path)
-        } else if let Some(path) = cookies_file {
-            Some(path)
         } else {
-            None
+            cookies_file
         };
 
         let mut ytdlp_args = Vec::new();
